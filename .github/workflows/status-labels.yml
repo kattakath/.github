@@ -1,0 +1,79 @@
+name: status-labels
+
+# Reusable: mirrors two pieces of PR state as labels, so they show up in the PR LIST and are
+# filterable (GitHub's own badges only show inside the PR):
+#   auto-merge   (green)  while auto-merge is armed
+#   merge-queue  (purple) while the PR sits in the merge queue
+#
+# The labels are DERIVED. Every run reads the PR's live state over GraphQL and sets both
+# labels to match, whichever event fired. So a missed or failed run is corrected by the next
+# one, and the label can never be the source of truth. Precedent: prow's `needs-rebase`
+# label, which its bot adds and removes itself.
+#
+# Call it from `pull_request_target`, NOT `pull_request`: a fork PR's `pull_request` token is
+# read-only ("The GITHUB_TOKEN has read-only permissions in pull requests from forked
+# repositories", GitHub docs), and a maintainer queues fork PRs. This is safe because nothing
+# here checks out or runs PR code; it only reads PR metadata and edits labels.
+#
+#   on:
+#     pull_request_target:
+#       types: [auto_merge_enabled, auto_merge_disabled, enqueued, dequeued, closed, reopened, synchronize]
+#   concurrency:
+#     group: status-labels-${{ github.event.pull_request.number }}
+#     cancel-in-progress: true   # every run recomputes from live state, so the latest wins
+#   permissions:
+#     pull-requests: write
+#     issues: write
+#   jobs:
+#     sync:
+#       uses: kattakath/.github/.github/workflows/status-labels.yml@<sha>
+#
+# Label edits made with GITHUB_TOKEN start no workflow runs, so this cannot loop.
+
+on:
+  workflow_call:
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Sync labels to live PR state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          NAME: ${{ github.event.repository.name }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Idempotent: --force only re-asserts the colour and description.
+          gh label create auto-merge --color 0E8A16 --description "Auto-merge is armed (derived by status-labels)" --force >/dev/null
+          gh label create merge-queue --color 5319E7 --description "In the merge queue (derived by status-labels)" --force >/dev/null
+
+          # shellcheck disable=SC2016 # $owner/$name/$pr are GraphQL variables, not shell
+          state=$(gh api graphql -F owner="$OWNER" -F name="$NAME" -F pr="$PR" -f query='
+            query($owner: String!, $name: String!, $pr: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $pr) { state isInMergeQueue autoMergeRequest { enabledAt } }
+              }
+            }' --jq '.data.repository.pullRequest')
+          open=$(jq -r '.state == "OPEN"' <<<"$state")
+          armed=$(jq -r --argjson o "$open" '$o and .autoMergeRequest != null' <<<"$state")
+          queued=$(jq -r --argjson o "$open" '$o and .isInMergeQueue' <<<"$state")
+          echo "PR #$PR: $(jq -c . <<<"$state") -> auto-merge=$armed merge-queue=$queued"
+
+          # REST, not `gh pr edit`: that one also reads project fields the token may not reach.
+          set_label() {  # $1 label, $2 want (true|false)
+            if [ "$2" = true ]; then
+              gh api -X POST "repos/$GH_REPO/issues/$PR/labels" -f "labels[]=$1" >/dev/null
+            elif gh api "repos/$GH_REPO/issues/$PR/labels" --jq '.[].name' | grep -qx "$1"; then
+              gh api -X DELETE "repos/$GH_REPO/issues/$PR/labels/$1" >/dev/null
+            fi
+          }
+          set_label auto-merge "$armed"
+          set_label merge-queue "$queued"

@@ -1,0 +1,17 @@
+name: status-labels
+
+on:
+  pull_request_target:
+    types: [auto_merge_enabled, auto_merge_disabled, enqueued, dequeued, closed, reopened, synchronize]
+
+concurrency:
+  group: status-labels-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync:
+    uses: ./.github/workflows/status-labels.yml

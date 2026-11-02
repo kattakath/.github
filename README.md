@@ -11,6 +11,7 @@ GitHub offers one.**
 | `actions/gate` | Composite action. Fails unless every job the caller's `gate` job needs ended **exactly** as expected: `success` where it should run, `skipped` where it shouldn't. |
 | `.github/workflows/auto-merge.yml` | Reusable. Arms squash auto-merge on same-repo, non-draft, non-Dependabot PRs, using a GitHub App token. |
 | `.github/workflows/arm-dependabot.yml` | Reusable. Arms Dependabot PRs from a schedule. A Dependabot-triggered run can't read the App key. |
+| `.github/workflows/status-labels.yml` | Reusable. Keeps `auto-merge` (green) and `merge-queue` (purple) labels in sync with the live PR state, so they show up in the PR list. Derived on every event, never trusted. Its header has the caller snippet. |
 | `rulesets/main.json`, `rulesets/merge-queue.json` | The default-branch ruleset: squash only, `gate` required (from GitHub Actions only), admin bypass. Plus the queue rule. |
 | `scripts/apply-ruleset.sh` | Makes a repo match the ruleset. Dry run by default. |
 
@@ -60,7 +61,7 @@ jobs:
 ```
 
 Then:
-1. Add the `auto-merge` and `arm-dependabot` callers. Each reusable file's header has the snippet.
+1. Add the `auto-merge`, `arm-dependabot` and `status-labels` callers. Each reusable file's header has the snippet.
 2. Merge that PR under the repo's current rules.
 3. Run `scripts/apply-ruleset.sh OWNER/REPO` and read the diff, then re-run with `--apply`.
    - On Tier A it sets `QUEUE_ENABLED` only after the queue rule exists.
