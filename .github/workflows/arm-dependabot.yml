@@ -1,0 +1,83 @@
+name: arm-dependabot
+
+# Reusable: arms auto-merge on every open, non-draft, unarmed `dependabot[bot]` PR.
+#
+# Why a schedule and not auto-merge.yml: "When a Dependabot event triggers a workflow, the
+# only secrets available to the workflow are Dependabot secrets", so the App key resolves
+# EMPTY there (kattakath/skills #92). A scheduled run is not a Dependabot event and keeps
+# Actions secrets. Arming with `GITHUB_TOKEN` instead would stop push:main workflows firing
+# after the merge (see auto-merge.yml). Copying the key into a Dependabot secret would make
+# a second copy that has to rotate in lockstep.
+#
+# Call it from a scheduled workflow:
+#
+#   on:
+#     schedule:
+#       - cron: "41 */6 * * *"   # off the hour: GitHub delays and drops runs at peak
+#     workflow_dispatch:
+#   concurrency:
+#     group: arm-dependabot
+#     cancel-in-progress: false
+#   permissions:
+#     contents: read
+#     pull-requests: read
+#   jobs:
+#     arm:
+#       uses: kattakath/.github/.github/workflows/arm-dependabot.yml@<sha>
+#       with:
+#         client-id: ${{ vars.CI_BOT_CLIENT_ID }}
+#       secrets:
+#         app-private-key: ${{ secrets.CI_BOT_APP_PRIVATE_KEY }}
+
+on:
+  workflow_call:
+    inputs:
+      client-id:
+        description: The CI App's client ID (a repo or org variable).
+        type: string
+        required: true
+    secrets:
+      app-private-key:
+        description: The CI App's private key.
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  arm:
+    name: Arm auto-merge on Dependabot PRs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.client-id }}
+          private-key: ${{ secrets.app-private-key }}
+
+      # Squash is the only method the shared ruleset allows. The author filter is exact
+      # (`app/dependabot` is what `gh` renders for the App author), so other bot lanes are
+      # never touched. No `github.event.*` value reaches the shell.
+      - name: Arm open dependabot[bot] PRs
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          prs=$(gh pr list --state open --limit 50 \
+            --json number,author,isDraft,autoMergeRequest \
+            --jq '.[] | select(.author.login == "app/dependabot" or .author.login == "dependabot")
+                      | select(.isDraft == false)
+                      | select(.autoMergeRequest == null)
+                      | .number')
+          if [ -z "$prs" ]; then
+            echo "no unarmed open dependabot PRs"
+            exit 0
+          fi
+          for n in $prs; do
+            echo "arming #$n"
+            # One PR that cannot be armed must not abort the sweep for the others.
+            gh pr merge --squash --auto "$n" || echo "  could not arm #$n; leaving it"
+          done

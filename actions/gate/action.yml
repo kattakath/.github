@@ -1,0 +1,41 @@
+name: gate
+description: >-
+  Fail unless every job the caller's `gate` job needs ended EXACTLY as expected:
+  `success` where it was meant to run, `skipped` where it was not. A skip that should
+  have run, a run that should have been skipped, a failure or a cancellation all go red.
+
+# Why an aggregator: "A job that is skipped will report its status as Success", and a job
+# skipped because a dependency failed "may not block merging" (GitHub docs, troubleshooting
+# required status checks). So a skippable job must never BE the required check; this is.
+# Prior art: indexmap, DeterminateSystems/magic-nix-cache-action.
+#
+# The caller's job MUST be named `gate` and use `if: ${{ !cancelled() }}`: every ruleset
+# made by scripts/apply-ruleset.sh requires that check name.
+
+inputs:
+  needs:
+    description: '`${{ toJSON(needs) }}` from the calling job.'
+    required: true
+  expect:
+    description: >-
+      JSON object mapping EVERY needed job id to whether it should have run on this event,
+      e.g. `{"quick": ${{ github.event_name == 'pull_request' }}, "validate": true}`.
+      The key sets must match exactly, so adding a job without updating this goes red.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Every leg ended as this event expects
+      shell: bash
+      env:
+        NEEDS: ${{ inputs.needs }}
+        EXPECT: ${{ inputs.expect }}
+      run: |
+        echo "expect: $(jq -c . <<<"$EXPECT")"
+        echo "result: $(jq -c 'map_values(.result)' <<<"$NEEDS")"
+        jq -e -n --argjson n "$NEEDS" --argjson e "$EXPECT" '
+          ($n | keys) == ($e | keys)
+          and ($e | to_entries | all(
+                $n[.key].result == (if .value then "success" else "skipped" end)))' >/dev/null \
+          || { echo "::error title=gate::a needed job did not end as expected (see expect/result above)"; exit 1; }

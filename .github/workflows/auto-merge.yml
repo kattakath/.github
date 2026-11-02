@@ -1,0 +1,65 @@
+name: auto-merge
+
+# Reusable: arms squash auto-merge on a same-repo, non-draft, non-Dependabot PR. With a
+# merge queue on, "auto-merge" means "add to the queue once `gate` is green"; without one,
+# it merges. A fork's PR is never armed: a maintainer queues or merges it after review.
+#
+# Call it from a `pull_request` workflow:
+#
+#   on:
+#     pull_request:
+#       types: [opened, reopened, ready_for_review, synchronize]
+#   concurrency:
+#     group: auto-merge-${{ github.event.pull_request.number }}
+#     cancel-in-progress: false   # true let a later event cancel the ready_for_review arm (nix-config #750)
+#   permissions:
+#     contents: read
+#   jobs:
+#     arm:
+#       uses: kattakath/.github/.github/workflows/auto-merge.yml@<sha>
+#       with:
+#         client-id: ${{ vars.CI_BOT_CLIENT_ID }}
+#       secrets:
+#         app-private-key: ${{ secrets.CI_BOT_APP_PRIVATE_KEY }}
+#
+# WHY AN APP TOKEN, NOT `GITHUB_TOKEN`. The merge is attributed to whoever armed it, and
+# events made by `GITHUB_TOKEN` start no workflow runs, so a `push: main` workflow (release
+# tags, deploys) would never fire after an auto-merge (kattakath/skills #5, #7).
+#
+# Dependabot is skipped: a Dependabot-triggered run gets only Dependabot secrets, so the App
+# key resolves EMPTY (kattakath/skills #92). arm-dependabot.yml arms those from a schedule.
+
+on:
+  workflow_call:
+    inputs:
+      client-id:
+        description: The CI App's client ID (a repo or org variable).
+        type: string
+        required: true
+    secrets:
+      app-private-key:
+        description: The CI App's private key.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  arm:
+    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.client-id }}
+          private-key: ${{ secrets.app-private-key }}
+
+      # Idempotent: re-arming an armed PR is a no-op, so `synchronize` re-arms a PR GitHub
+      # disarmed (a conflict, a failed required check, a queue ejection) once the fix lands.
+      - uses: peter-evans/enable-pull-request-automerge@a660677d5469627102a1c1e11409dd063606628d # v3.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          pull-request-number: ${{ github.event.pull_request.number }}
+          merge-method: squash

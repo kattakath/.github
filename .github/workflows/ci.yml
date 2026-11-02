@@ -1,0 +1,97 @@
+name: ci
+
+# This repo's own CI, built the way every caller's is: a required `gate` job that asserts
+# each needed job ended as the event expects. Everything here is cheap, so the full suite
+# runs on the PR AND in the queue; the single-run split pays off only in a heavy repo.
+
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: actionlint (+ shellcheck over run blocks)
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
+      - name: shellcheck scripts
+        run: shellcheck scripts/*.sh
+      - name: ruleset JSON parses
+        run: jq -e '.rules | length > 0' rulesets/main.json && jq -e '.type == "merge_queue"' rulesets/merge-queue.json
+
+  # The gate action must REJECT, not just accept: a gate that cannot go red is decoration.
+  gate-cases:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: ok
+        uses: ./actions/gate
+        with:
+          needs: '{"quick":{"result":"success"},"heavy":{"result":"skipped"}}'
+          expect: '{"quick":true,"heavy":false}'
+      - id: failed
+        continue-on-error: true
+        uses: ./actions/gate
+        with:
+          needs: '{"quick":{"result":"success"},"heavy":{"result":"failure"}}'
+          expect: '{"quick":true,"heavy":true}'
+      - id: wrongly-skipped
+        continue-on-error: true
+        uses: ./actions/gate
+        with:
+          needs: '{"quick":{"result":"skipped"},"heavy":{"result":"skipped"}}'
+          expect: '{"quick":false,"heavy":true}'
+      - id: ran-when-skip-expected
+        continue-on-error: true
+        uses: ./actions/gate
+        with:
+          needs: '{"heavy":{"result":"success"}}'
+          expect: '{"heavy":false}'
+      - id: cancelled
+        continue-on-error: true
+        uses: ./actions/gate
+        with:
+          needs: '{"heavy":{"result":"cancelled"}}'
+          expect: '{"heavy":true}'
+      - id: key-mismatch
+        continue-on-error: true
+        uses: ./actions/gate
+        with:
+          needs: '{"quick":{"result":"success"},"heavy":{"result":"success"}}'
+          expect: '{"heavy":true}'
+      - name: Every negative case went red
+        env:
+          OUTCOMES: >-
+            ${{ steps.failed.outcome }} ${{ steps.wrongly-skipped.outcome }}
+            ${{ steps.ran-when-skip-expected.outcome }} ${{ steps.cancelled.outcome }}
+            ${{ steps.key-mismatch.outcome }}
+        run: |
+          echo "negative outcomes: $OUTCOMES"
+          for o in $OUTCOMES; do [ "$o" = failure ] || { echo "::error::a negative case passed"; exit 1; }; done
+          n=$(wc -w <<<"$OUTCOMES"); [ "$n" -eq 5 ] || { echo "::error::expected 5 cases, saw $n"; exit 1; }
+
+  gate:
+    if: ${{ !cancelled() }}
+    needs: [lint, gate-cases]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./actions/gate
+        with:
+          needs: ${{ toJSON(needs) }}
+          expect: '{"lint": true, "gate-cases": true}'
