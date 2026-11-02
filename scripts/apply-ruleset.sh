@@ -4,6 +4,7 @@
 #
 #   scripts/apply-ruleset.sh OWNER/REPO            # dry run: print the diff, change nothing
 #   scripts/apply-ruleset.sh OWNER/REPO --apply    # write it
+#   ... --apply --replace-checks                   # also replace required checks other than gate
 #
 # Tier is DERIVED, never passed: GitHub offers a merge queue only on a public repo owned by an
 # organization ("available in any public repository owned by an organization", docs). So:
@@ -13,12 +14,20 @@
 # skip the heavy suite with nothing left to run it.
 #
 # Refuses to replace a ruleset whose required checks are not exactly [gate]: replacing it
-# would silently drop checks that repo still relies on. Move those under `gate` first.
+# would silently drop checks that repo still relies on. Move those under `gate` FIRST (a PR
+# that merges under the old ruleset), then pass --replace-checks to acknowledge the swap.
 set -euo pipefail
 
 repo=${1:?usage: apply-ruleset.sh OWNER/REPO [--apply]}
 apply=false
-[ "${2:-}" = "--apply" ] && apply=true
+replace_checks=false
+for arg in "${@:2}"; do
+  case "$arg" in
+    --apply) apply=true ;;
+    --replace-checks) replace_checks=true ;;
+    *) echo "unknown argument: $arg" >&2; exit 64 ;;
+  esac
+done
 here=$(cd "$(dirname "$0")/.." && pwd)
 
 meta=$(gh api "repos/$repo" --jq '{owner: .owner.type, visibility, default: .default_branch}')
@@ -57,8 +66,11 @@ if [ "${#match[@]}" -eq 1 ]; then
   current=$(gh api "repos/$repo/rulesets/$id")
   checks=$(jq -c '[.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | sort' <<<"$current")
   if [ "$checks" != '[]' ] && [ "$checks" != '["gate"]' ]; then
-    echo "error: ruleset $id requires $checks; move them under a 'gate' job before replacing it" >&2
-    exit 3
+    if ! $replace_checks; then
+      echo "error: ruleset $id requires $checks; move them under a 'gate' job, then pass --replace-checks" >&2
+      exit 3
+    fi
+    echo "note: replacing required checks $checks with [\"gate\"] (--replace-checks)"
   fi
   echo "--- current ruleset $id"; echo "+++ desired"
   if diff <(jq -S "$norm" <<<"$current") <(jq -S "$norm" <<<"$desired"); then echo "(ruleset already matches)"; fi
