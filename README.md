@@ -68,6 +68,22 @@ Then:
    - It refuses to replace a ruleset that requires checks other than `gate`.
 4. Open WIP PRs as **drafts**. `gate` goes green on a PR in seconds, so an armed PR is queued at once.
 
+## Pitfalls (each one measured in the rollout)
+
+- **Never put `[skip ci]` in a branch commit.** A squash merge copies every branch commit's
+  message into the merge commit, so the tag silences `main`'s push workflows too
+  (deploys, publish chains). ismailkattakath/userscripts #15 skipped its `lint` push run, and
+  `publish` stayed one commit behind until it was dispatched by hand.
+- **A queued run can be starved of runners.** GitHub-hosted macOS arm64 capacity ran out, and
+  the job "was not acquired by Runner of type hosted even after multiple attempts". After
+  15 min it was cancelled, `gate` went red (correctly), and the queue ejected the PR
+  (kattakath/ircc-whatsapp-bot #16). Re-run the PR's `arm` job to re-queue it. Prefer Linux
+  runners for the heavy leg wherever the suite allows.
+- **Expressions inside an action input's `description` are evaluated.** A `${{ … }}` in a
+  description fails the action at load time.
+- **Old actionlint versions reject `enqueued`/`dequeued` on `pull_request_target`.**
+  GitHub's docs allow both. Use actionlint ≥ 1.7.12.
+
 ## Why this shape
 
 - **Measured gain:** on kattakath/skills the heavy suite ran twice per PR (~96 s on the PR,
