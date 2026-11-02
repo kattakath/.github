@@ -14,13 +14,13 @@ description: >-
 
 inputs:
   needs:
-    description: '`${{ toJSON(needs) }}` from the calling job.'
+    description: 'The calling job''s needs context, passed through toJSON.'
     required: true
   expect:
     description: >-
-      JSON object mapping EVERY needed job id to whether it should have run on this event,
-      e.g. `{"quick": ${{ github.event_name == 'pull_request' }}, "validate": true}`.
-      The key sets must match exactly, so adding a job without updating this goes red.
+      JSON object mapping EVERY needed job id to whether it should have run on this event
+      (true/false; the README shows the expression form). The key sets must match exactly,
+      so adding a job without updating this goes red.
     required: true
 
 runs:

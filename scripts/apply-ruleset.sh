@@ -79,5 +79,5 @@ fi
 if [ "$tier" = A ]; then
   gh variable set QUEUE_ENABLED -R "$repo" --body true && echo "set QUEUE_ENABLED=true"
 else
-  gh variable delete QUEUE_ENABLED -R "$repo" 2>/dev/null && echo "removed QUEUE_ENABLED" || true
+  if gh variable delete QUEUE_ENABLED -R "$repo" 2>/dev/null; then echo "removed QUEUE_ENABLED"; fi
 fi
