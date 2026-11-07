@@ -8,10 +8,14 @@ on:
   pull_request:
   merge_group:
     types: [checks_requested]
+  # The operator's own changes land by direct push (admin bypass), not via a PR, so this
+  # is the only check they get. The kattakath/skills `ci-watch` plugin waits on it.
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
