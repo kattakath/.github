@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Make one repo's default-branch ruleset match rulesets/main.json (plus merge-queue.json when
-# the repo can have a queue), and set the repo settings the landing flow needs.
+# the repo can have a queue), and set the repo settings the landing flow needs, plus the
+# four security settings on a public repo.
 #
 #   scripts/apply-ruleset.sh OWNER/REPO            # dry run: print the diff, change nothing
 #   scripts/apply-ruleset.sh OWNER/REPO --apply    # write it
@@ -83,6 +84,18 @@ if ! $apply; then echo "dry run: nothing changed (re-run with --apply)"; exit 0;
 
 gh api -X PATCH "repos/$repo" -F allow_auto_merge=true -F allow_squash_merge=true \
   -F delete_branch_on_merge=true --jq '"settings: auto_merge=\(.allow_auto_merge) squash=\(.allow_squash_merge) delete_branch=\(.delete_branch_on_merge)"'
+# Security settings, PUBLIC repos only: secret scanning and push protection are free there
+# and refused on a private repo without a paid plan. Nothing else owns these four, so a repo
+# set up here is the only place they are guaranteed on (2026-11-18: 5 of 16 had scanning off).
+if [ "$visibility" = public ]; then
+  gh api -X PATCH "repos/$repo" --input - \
+    --jq '"security: secret_scanning=\(.security_and_analysis.secret_scanning.status) push_protection=\(.security_and_analysis.secret_scanning_push_protection.status)"' \
+    <<<'{"security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}}'
+  gh api -X PUT "repos/$repo/vulnerability-alerts" >/dev/null && echo "security: vulnerability alerts on"
+  gh api -X PUT "repos/$repo/automated-security-fixes" >/dev/null && echo "security: Dependabot security updates on"
+else
+  echo "security: skipped ($visibility repo)"
+fi
 if [ -n "$id" ]; then
   gh api -X PUT "repos/$repo/rulesets/$id" --input - <<<"$desired" --jq '"updated ruleset \(.id): \([.rules[].type] | join(","))"'
 else
